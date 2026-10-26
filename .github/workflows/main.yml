@@ -1,50 +1,62 @@
-name: Build Kernel and DTB
+name: OnePlus 13 - Mu Linux payload
 
 on:
   push:
-    branches: [ v6.16 ]
+    branches: [v6.16]
   pull_request:
-    branches: [ v6.16 ]
+    branches: [v6.16]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: dodge-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        display: [firmware, native]
+    env:
+      ARCH: arm64
+      CROSS_COMPILE: aarch64-linux-gnu-
+      LLVM: '-18'
+      KBUILD_BUILD_USER: github-actions
+      KBUILD_BUILD_HOST: linux-dodge
     steps:
-    - name: Clone kernel source
-      uses: actions/checkout@v3
-
-    - name: Set up cross-compiler
-      uses: actions/setup-python@v4
-    - name: Install build dependencies
-      run: |
-        sudo apt update
-        sudo apt install -y bc build-essential flex bison libssl-dev \
-          libncurses5-dev libelf-dev ccache dwarves \
-          gcc-aarch64-linux-gnu clang
-
-    - name: Setup environment vars
-      run: |
-        echo "ARCH=arm64" >> $GITHUB_ENV
-        echo "CROSS_COMPILE=aarch64-linux-gnu-" >> $GITHUB_ENV
-        echo "CC=clang" >> $GITHUB_ENV
-        
-
-    - name: Kernel defconfig
-      run: |
-        make O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC=clang defconfig sm8750.config
-
-    - name: Build Kernel & DTBs
-      run: |
-        make -j$(nproc) O=out ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC=clang Image dtbs
-
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: kernel-build+dtb
-        path: |
-          out/arch/arm64/boot/Image
-          out/arch/arm64/boot/Image.gz
-          out/arch/arm64/boot/dts/qcom/sm8750-oneplus-dodge.dtb
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential bc bison flex libssl-dev libelf-dev \
+            clang-18 lld-18 llvm-18 gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
+            zstd xz-utils python3
+      - name: Build kernel, device tree and modules
+        env:
+          DISPLAY_PROFILE: ${{ matrix.display }}
+        run: bash scripts/build-dodge-mu.sh
+      - name: Upload boot payload
+        uses: actions/upload-artifact@v4
+        with:
+          name: dodge-mu-${{ matrix.display }}-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dodge-logs-${{ matrix.display }}-${{ github.sha }}
+          path: |
+            build-logs/
+            out/.config
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 14
